@@ -28,6 +28,11 @@ const FACE_INSTRUCTIONS =
   "Coordinates must be normalized (0-1) relative to the full image, with (0,0) at the top-left. " +
   'If no faces are visible, return {"faces":[]}. Do not include code fences.';
 
+interface ParsedImage {
+  mimeType: string;
+  data: string;
+}
+
 const readEnvProvider = () => {
   const explicit =
     process.env.GEMINI_PROVIDER?.trim().toLowerCase() ||
@@ -39,10 +44,10 @@ const readEnvProvider = () => {
   return hasOpenRouterKey ? "openrouter" : "google";
 };
 
-const normalizeProvider = (value) =>
+const normalizeProvider = (value: string) =>
   value === "openrouter" ? "openrouter" : "google";
 
-const resolveProvider = (requestedProvider) => {
+const resolveProvider = (requestedProvider?: string) => {
   const candidate =
     typeof requestedProvider === "string" && requestedProvider.trim()
       ? requestedProvider.trim().toLowerCase()
@@ -50,7 +55,7 @@ const resolveProvider = (requestedProvider) => {
   return normalizeProvider(candidate);
 };
 
-const normalizeModelId = (value, provider) => {
+const normalizeModelId = (value: string, provider: string) => {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (provider === "openrouter") {
     return trimmed || DEFAULT_OPENROUTER_MODEL;
@@ -60,20 +65,25 @@ const normalizeModelId = (value, provider) => {
   return cleaned.startsWith("models/") ? cleaned : `models/${cleaned}`;
 };
 
-const parseImageDataUrl = (value) => {
+const parseImageDataUrl = (value: string): ParsedImage | null => {
   if (typeof value !== "string") return null;
   const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) return null;
   return { mimeType: match[1], data: match[2] };
 };
 
-const stripJsonFences = (value) =>
+const stripJsonFences = (value: string) =>
   value
     .replace(/^```json\s*/i, "")
     .replace(/```$/i, "")
     .trim();
 
-const extractGeminiResponseText = (payload) => {
+const extractGeminiResponseText = (payload: {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    output_text?: string;
+  }>;
+}) => {
   const candidate = payload?.candidates?.[0];
   const aggregatedText = Array.isArray(candidate?.content?.parts)
     ? candidate.content.parts
@@ -84,7 +94,7 @@ const extractGeminiResponseText = (payload) => {
   return aggregatedText ? stripJsonFences(aggregatedText) : "";
 };
 
-const flattenOpenRouterMessageContent = (content) => {
+const flattenOpenRouterMessageContent = (content: unknown): string => {
   if (!content) return "";
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -92,135 +102,86 @@ const flattenOpenRouterMessageContent = (content) => {
       .map((part) => {
         if (!part) return "";
         if (typeof part === "string") return part;
-        if (typeof part.text === "string") return part.text;
-        if (typeof part.content === "string") return part.content;
-        if (typeof part.type === "string") {
-          if (part.type === "text" && typeof part.text === "string") {
-            return part.text;
+        if (typeof (part as { text?: string }).text === "string")
+          return (part as { text: string }).text;
+        if (typeof (part as { content?: string }).content === "string")
+          return (part as { content: string }).content;
+        if (typeof (part as { type?: string }).type === "string") {
+          if (
+            (part as { type: string }).type === "text" &&
+            typeof (part as { text?: string }).text === "string"
+          ) {
+            return (part as { text: string }).text;
           }
           return "";
         }
-        if (Array.isArray(part.content)) {
-          return flattenOpenRouterMessageContent(part.content);
+        if (Array.isArray((part as { content?: unknown[] }).content)) {
+          return flattenOpenRouterMessageContent(
+            (part as { content: unknown[] }).content,
+          );
         }
         return "";
       })
       .join("");
   }
-  if (typeof content.text === "string") return content.text;
-  if (typeof content.content === "string") return content.content;
+  if (typeof (content as { text?: string }).text === "string")
+    return (content as { text: string }).text;
+  if (typeof (content as { content?: string }).content === "string")
+    return (content as { content: string }).content;
   return "";
 };
 
-const extractStructuredAssistantText = (payload) => {
+const extractStructuredAssistantText = (payload: {
+  choices?: Array<{
+    message?: { content?: unknown };
+    content?: unknown;
+    text?: string;
+  }>;
+}) => {
   const choice = payload?.choices?.[0];
   if (!choice) return "";
   const content =
-    choice?.message?.content ??
-    choice?.content ??
-    (typeof choice.text === "string" ? choice.text : "");
+    (choice as { message?: { content?: unknown } }).message?.content ??
+    (choice as { content?: unknown }).content ??
+    (typeof (choice as { text?: string }).text === "string"
+      ? (choice as { text: string }).text
+      : "");
   const flattened = flattenOpenRouterMessageContent(content).trim();
   return flattened ? stripJsonFences(flattened) : "";
 };
 
-const tryParseJson = (value) => {
+const tryParseJson = (value: string) => {
   if (!value) return null;
   try {
     return JSON.parse(value);
-  } catch (error) {
+  } catch {
     return null;
   }
 };
 
-export async function POST(req) {
-  try {
-    const body = await req.json();
-    const provider = resolveProvider(body?.provider);
-    const usingOpenRouter = provider === "openrouter";
-    const apiKey = usingOpenRouter
-      ? process.env.OPENROUTER_API_KEY ||
-        process.env.GEMINI_API_KEY ||
-        process.env.VITE_GEMINI_API_KEY ||
-        process.env.NEXT_PUBLIC_OPENROUTER_API_KEY ||
-        ""
-      : process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
-
-    if (!apiKey) {
-      const missingEnv = usingOpenRouter
-        ? "OPENROUTER_API_KEY (or GEMINI_API_KEY)"
-        : "GEMINI_API_KEY";
-      return NextResponse.json(
-        { error: `Missing ${missingEnv} environment variable` },
-        { status: 500 },
-      );
-    }
-
-    const imageDataUrl = body?.imageDataUrl;
-    const image = parseImageDataUrl(imageDataUrl);
-    if (!image) {
-      return NextResponse.json(
-        { error: "Missing or invalid imageDataUrl." },
-        { status: 400 },
-      );
-    }
-
-    const targetModel = normalizeModelId(body?.model, provider);
-
-    let data;
-    if (usingOpenRouter) {
-      const openRouterAttempt = await generateWithOpenRouter({
-        apiKey,
-        targetModel,
-        imageDataUrl,
-      });
-      if (!openRouterAttempt.ok) {
-        return NextResponse.json(
-          { error: "Gemini API error", detail: openRouterAttempt.detail },
-          { status: openRouterAttempt.status },
-        );
-      }
-      data = openRouterAttempt.data;
-    } else {
-      const geminiAttempt = await generateWithGemini({
-        apiKey,
-        targetModel,
-        image,
-      });
-      if (!geminiAttempt.ok) {
-        return NextResponse.json(
-          { error: "Gemini API error", detail: geminiAttempt.detail },
-          { status: geminiAttempt.status },
-        );
-      }
-      data = geminiAttempt.data;
-    }
-
-    const rawText = usingOpenRouter
-      ? extractStructuredAssistantText(data)
-      : extractGeminiResponseText(data);
-    const parsed = tryParseJson(rawText);
-    const responsePayload = {
-      provider,
-      model: targetModel,
-      rawText,
-      parsed,
-      data: rawText ? undefined : data,
-    };
-
-    return NextResponse.json(responsePayload, { status: 200 });
-  } catch (error) {
-    console.error("[Gemini Face Boxes Route]", error);
-    return NextResponse.json(
-      {
-        error: "Server error",
-        detail: error instanceof Error ? error.message : String(error),
-      },
-      { status: 500 },
-    );
-  }
+interface GenerateWithOpenRouterResult {
+  ok: boolean;
+  data?: unknown;
+  status?: number;
+  detail?: string;
 }
 
-async function generateWithGemini({ apiKey, targetModel, image }) {
+interface GenerateWithGeminiResult {
+  ok: boolean;
+  data?: unknown;
+  status?: number;
+  detail?: string;
+}
+
+async function generateWithGemini({
+  apiKey,
+  targetModel,
+  image,
+}: {
+  apiKey: string;
+  targetModel: string;
+  image: ParsedImage;
+}): Promise<GenerateWithGeminiResult> {
   const payload = {
     contents: [
       {
@@ -259,7 +220,15 @@ async function generateWithGemini({ apiKey, targetModel, image }) {
   };
 }
 
-async function generateWithOpenRouter({ apiKey, targetModel, imageDataUrl }) {
+async function generateWithOpenRouter({
+  apiKey,
+  targetModel,
+  imageDataUrl,
+}: {
+  apiKey: string;
+  targetModel: string;
+  imageDataUrl: string;
+}): Promise<GenerateWithOpenRouterResult> {
   const payload = {
     model: targetModel,
     messages: [
@@ -297,4 +266,107 @@ async function generateWithOpenRouter({ apiKey, targetModel, imageDataUrl }) {
   }
 
   return { ok: true, data: await response.json() };
+}
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const provider = resolveProvider(body?.provider);
+    const usingOpenRouter = provider === "openrouter";
+    const apiKey = usingOpenRouter
+      ? process.env.OPENROUTER_API_KEY ||
+        process.env.GEMINI_API_KEY ||
+        process.env.VITE_GEMINI_API_KEY ||
+        process.env.NEXT_PUBLIC_OPENROUTER_API_KEY ||
+        ""
+      : process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "";
+
+    if (!apiKey) {
+      const missingEnv = usingOpenRouter
+        ? "OPENROUTER_API_KEY (or GEMINI_API_KEY)"
+        : "GEMINI_API_KEY";
+      return NextResponse.json(
+        { error: `Missing ${missingEnv} environment variable` },
+        { status: 500 },
+      );
+    }
+
+    const imageDataUrl = body?.imageDataUrl;
+    const image = parseImageDataUrl(imageDataUrl);
+    if (!image) {
+      return NextResponse.json(
+        { error: "Missing or invalid imageDataUrl." },
+        { status: 400 },
+      );
+    }
+
+    const targetModel = normalizeModelId(body?.model || "", provider);
+
+    let data;
+    if (usingOpenRouter) {
+      const openRouterAttempt = await generateWithOpenRouter({
+        apiKey,
+        targetModel,
+        imageDataUrl,
+      });
+      if (!openRouterAttempt.ok) {
+        return NextResponse.json(
+          { error: "Gemini API error", detail: openRouterAttempt.detail },
+          { status: openRouterAttempt.status },
+        );
+      }
+      data = openRouterAttempt.data;
+    } else {
+      const geminiAttempt = await generateWithGemini({
+        apiKey,
+        targetModel,
+        image,
+      });
+      if (!geminiAttempt.ok) {
+        return NextResponse.json(
+          { error: "Gemini API error", detail: geminiAttempt.detail },
+          { status: geminiAttempt.status },
+        );
+      }
+      data = geminiAttempt.data;
+    }
+
+    const rawText = usingOpenRouter
+      ? extractStructuredAssistantText(
+          data as {
+            choices?: Array<{
+              message?: { content?: unknown };
+              content?: unknown;
+              text?: string;
+            }>;
+          },
+        )
+      : extractGeminiResponseText(
+          data as {
+            candidates?: Array<{
+              content?: { parts?: Array<{ text?: string }> };
+              output_text?: string;
+            }>;
+          },
+        );
+    const parsed = tryParseJson(rawText);
+    const responsePayload = {
+      provider,
+      model: targetModel,
+      rawText,
+      parsed,
+      data: rawText ? undefined : data,
+    };
+
+    return NextResponse.json(responsePayload, { status: 200 });
+  } catch (error) {
+    console.error("[Gemini Face Boxes Route]", error);
+    return NextResponse.json(
+      {
+        error: "Server error",
+        detail: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
+  }
 }

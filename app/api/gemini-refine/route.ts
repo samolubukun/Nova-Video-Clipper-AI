@@ -24,17 +24,37 @@ const GENERATION_CONFIG = {
   topP: 0.9,
 };
 
-const isValidShorteningMode = (value) =>
+interface Word {
+  text: string;
+  start: number;
+  end: number;
+  speaker_id?: string | null;
+}
+
+interface KeepRange {
+  start: number;
+  end: number;
+}
+
+interface TrimmedConcept {
+  trimmed_text?: string;
+  trimmed_words?: Word[];
+  estimated_duration_seconds?: number;
+  keep_ranges?: number[][];
+  [key: string]: unknown;
+}
+
+const isValidShorteningMode = (value: unknown) =>
   typeof value === "string" &&
   Object.hasOwn(SHORTENING_MODE_INSTRUCTIONS, value);
 
-const normalizeVariantCount = (value) => {
-  const numeric = Number.parseInt(value, 10);
+const normalizeVariantCount = (value: unknown) => {
+  const numeric = Number.parseInt(String(value), 10);
   if (!Number.isFinite(numeric)) return DEFAULT_VARIANT_COUNT;
   return Math.min(MAX_VARIANT_COUNT, Math.max(MIN_VARIANT_COUNT, numeric));
 };
 
-const buildInstructions = (mode, variantCount) => {
+const buildInstructions = (mode: string, variantCount: number) => {
   const resolved = isValidShorteningMode(mode) ? mode : DEFAULT_SHORTENING_MODE;
   const focus = SHORTENING_MODE_INSTRUCTIONS[resolved];
   const resolvedVariants = normalizeVariantCount(variantCount);
@@ -48,9 +68,9 @@ const buildInstructions = (mode, variantCount) => {
   return `${BASE_INSTRUCTIONS}\n\n${schemaSection}\n\nShortening objective:\n${focus}\n\nImplementation notes:\n- trimmed_text must use only words from TRANSCRIPT_TEXT, in order; deletions only.\n- Keep complete sentences; avoid clipped fragments.\n- estimated_duration_seconds can be a rough estimate.\n- Use notes to briefly describe the main deletions or any unmet constraints.`;
 };
 
-const buildTranscriptText = (sourceWords) => {
+const buildTranscriptText = (sourceWords: Word[]) => {
   if (!Array.isArray(sourceWords)) return "";
-  const parts = [];
+  const parts: string[] = [];
   sourceWords.forEach((word, index) => {
     const text = typeof word?.text === "string" ? word.text.trim() : "";
     if (!text) return;
@@ -72,13 +92,13 @@ const buildTranscriptText = (sourceWords) => {
     .trim();
 };
 
-const normalizeKeepRanges = (value, maxIndex) => {
+const normalizeKeepRanges = (value: unknown, maxIndex: number): KeepRange[] => {
   if (!Array.isArray(value)) return [];
-  const ranges = value
+  const ranges = (value as unknown[][])
     .map((range) => {
       if (!Array.isArray(range) || range.length < 2) return null;
-      const start = Number.parseInt(range[0], 10);
-      const end = Number.parseInt(range[1], 10);
+      const start = Number.parseInt(String(range[0]), 10);
+      const end = Number.parseInt(String(range[1]), 10);
       if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
       const clampedStart = Math.min(maxIndex, Math.max(0, start));
       const clampedEnd = Math.min(maxIndex, Math.max(0, end));
@@ -86,10 +106,10 @@ const normalizeKeepRanges = (value, maxIndex) => {
       const to = Math.max(clampedStart, clampedEnd);
       return { start: from, end: to };
     })
-    .filter(Boolean)
+    .filter((r): r is KeepRange => r !== null)
     .sort((a, b) => a.start - b.start);
 
-  const merged = [];
+  const merged: KeepRange[] = [];
   ranges.forEach((range) => {
     const last = merged[merged.length - 1];
     if (last && range.start <= last.end + 1) {
@@ -101,20 +121,25 @@ const normalizeKeepRanges = (value, maxIndex) => {
   return merged;
 };
 
-const normalizeWordToken = (value) =>
+const normalizeWordToken = (value: unknown) =>
   String(value || "")
     .toLowerCase()
     .replace(/[^a-z0-9']+/g, "");
 
-const tokenizeTranscriptText = (text) =>
+const tokenizeTranscriptText = (text: string) =>
   String(text || "")
     .split(/\s+/)
     .map(normalizeWordToken)
     .filter(Boolean);
 
-const buildSentenceRanges = (sourceWords) => {
+interface SentenceRange {
+  start: number;
+  end: number;
+}
+
+const buildSentenceRanges = (sourceWords: Word[]): SentenceRange[] => {
   if (!Array.isArray(sourceWords) || !sourceWords.length) return [];
-  const ranges = [];
+  const ranges: SentenceRange[] = [];
   let rangeStart = 0;
   sourceWords.forEach((word, index) => {
     const text = typeof word?.text === "string" ? word.text.trim() : "";
@@ -136,13 +161,16 @@ const buildSentenceRanges = (sourceWords) => {
   return ranges;
 };
 
-const filterIndicesBySentenceCoverage = (sourceWords, indices) => {
+const filterIndicesBySentenceCoverage = (
+  sourceWords: Word[],
+  indices: number[],
+): number[] => {
   if (!Array.isArray(sourceWords) || !indices?.length) return indices ?? [];
   const ranges = buildSentenceRanges(sourceWords);
   if (!ranges.length) return indices;
   const keptSet = new Set(indices);
-  const strictSet = new Set();
-  const looseSet = new Set();
+  const strictSet = new Set<number>();
+  const looseSet = new Set<number>();
   ranges.forEach((range) => {
     let kept = 0;
     for (let i = range.start; i <= range.end; i += 1) {
@@ -171,7 +199,10 @@ const filterIndicesBySentenceCoverage = (sourceWords, indices) => {
   return strict;
 };
 
-const buildTrimmedWordsFromIndices = (sourceWords, indices) => {
+const buildTrimmedWordsFromIndices = (
+  sourceWords: Word[],
+  indices: number[],
+): Word[] => {
   if (!Array.isArray(sourceWords) || !indices?.length) return [];
   return indices.map((index) => {
     const word = sourceWords[index];
@@ -184,25 +215,24 @@ const buildTrimmedWordsFromIndices = (sourceWords, indices) => {
   });
 };
 
-const normalizeWordTokenStrict = (value) =>
-  String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9']+/g, "");
-
-const buildTrimmedWordsFromText = (sourceWords, trimmedText) => {
+const buildTrimmedWordsFromText = (
+  sourceWords: Word[],
+  trimmedText: string,
+) => {
   if (!Array.isArray(sourceWords) || !trimmedText) {
-    return { words: [], matchRatio: 0, indices: [] };
+    return { words: [] as Word[], matchRatio: 0, indices: [] as number[] };
   }
 
-  const normalize = (t) =>
+  const normalize = (t: string) =>
     String(t || "")
       .toLowerCase()
       .replace(/[^a-z0-9'\s]/g, "");
   const targetTokens = normalize(trimmedText).split(/\s+/).filter(Boolean);
 
-  if (!targetTokens.length) return { words: [], matchRatio: 0, indices: [] };
+  if (!targetTokens.length)
+    return { words: [] as Word[], matchRatio: 0, indices: [] as number[] };
 
-  const matchedIndices = [];
+  const matchedIndices: number[] = [];
   let sourceIdx = 0;
 
   for (const token of targetTokens) {
@@ -220,7 +250,8 @@ const buildTrimmedWordsFromText = (sourceWords, trimmedText) => {
     }
   }
 
-  if (!matchedIndices.length) return { words: [], matchRatio: 0, indices: [] };
+  if (!matchedIndices.length)
+    return { words: [] as Word[], matchRatio: 0, indices: [] as number[] };
 
   const startIdx = Math.min(...matchedIndices);
   const endIdx = Math.max(...matchedIndices);
@@ -238,10 +269,13 @@ const buildTrimmedWordsFromText = (sourceWords, trimmedText) => {
   return { words: trimmedWords, matchRatio, indices: matchedIndices };
 };
 
-const buildTrimmedWordsFromRanges = (sourceWords, keepRanges) => {
+const buildTrimmedWordsFromRanges = (
+  sourceWords: Word[],
+  keepRanges: number[][],
+): Word[] => {
   if (!Array.isArray(sourceWords) || sourceWords.length === 0) return [];
   const normalized = normalizeKeepRanges(keepRanges, sourceWords.length - 1);
-  const trimmed = [];
+  const trimmed: Word[] = [];
   normalized.forEach((range) => {
     for (let index = range.start; index <= range.end; index += 1) {
       const word = sourceWords[index];
@@ -257,7 +291,7 @@ const buildTrimmedWordsFromRanges = (sourceWords, keepRanges) => {
   return trimmed;
 };
 
-const computeEstimatedDuration = (words) => {
+const computeEstimatedDuration = (words: Word[]) => {
   if (!Array.isArray(words) || !words.length) return null;
   const total = words.reduce((sum, word) => {
     const start = Number.isFinite(word?.start) ? word.start : 0;
@@ -268,13 +302,17 @@ const computeEstimatedDuration = (words) => {
   return Math.round(total * 10) / 10;
 };
 
-const ensureTrimmedWords = (entry, sourceWords) => {
+const ensureTrimmedWords = (
+  entry: TrimmedConcept,
+  sourceWords: Word[],
+): TrimmedConcept => {
   if (!entry || typeof entry !== "object") return entry;
   const trimmedText =
     typeof entry.trimmed_text === "string" ? entry.trimmed_text.trim() : "";
   const hasKeepRanges = Array.isArray(entry.keep_ranges);
-  let trimmedWords = [];
-  let trimmedTextAttempt = null;
+  let trimmedWords: Word[] = [];
+  let trimmedTextAttempt: ReturnType<typeof buildTrimmedWordsFromText> | null =
+    null;
   if (trimmedText) {
     trimmedTextAttempt = buildTrimmedWordsFromText(sourceWords, trimmedText);
     if (trimmedTextAttempt.matchRatio >= 0.65) {
@@ -292,7 +330,10 @@ const ensureTrimmedWords = (entry, sourceWords) => {
     }
   }
   if (!trimmedWords.length && hasKeepRanges) {
-    trimmedWords = buildTrimmedWordsFromRanges(sourceWords, entry.keep_ranges);
+    trimmedWords = buildTrimmedWordsFromRanges(
+      sourceWords,
+      entry.keep_ranges as number[][],
+    );
   }
   if (!trimmedWords.length && trimmedTextAttempt?.indices?.length) {
     const filteredIndices = filterIndicesBySentenceCoverage(
@@ -302,7 +343,7 @@ const ensureTrimmedWords = (entry, sourceWords) => {
     trimmedWords = buildTrimmedWordsFromIndices(sourceWords, filteredIndices);
   }
   if (!trimmedWords.length && Array.isArray(entry.trimmed_words)) {
-    trimmedWords = entry.trimmed_words;
+    trimmedWords = entry.trimmed_words as Word[];
   }
   const estimated =
     typeof entry.estimated_duration_seconds === "number" &&
@@ -316,7 +357,12 @@ const ensureTrimmedWords = (entry, sourceWords) => {
   };
 };
 
-const extractGeminiResponseText = (payload) => {
+const extractGeminiResponseText = (payload: {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    output_text?: string;
+  }>;
+}) => {
   const candidate = payload?.candidates?.[0];
   const aggregatedText = Array.isArray(candidate?.content?.parts)
     ? candidate.content.parts
@@ -327,9 +373,21 @@ const extractGeminiResponseText = (payload) => {
   return aggregatedText;
 };
 
-const expandGeminiResponse = (payload, sourceWords) => {
+interface GeminiResponse {
+  concepts?: TrimmedConcept[];
+  [key: string]: unknown;
+}
+
+const expandGeminiResponse = (payload: unknown, sourceWords: Word[]) => {
   if (!payload || !Array.isArray(sourceWords)) return null;
-  const text = extractGeminiResponseText(payload);
+  const text = extractGeminiResponseText(
+    payload as {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        output_text?: string;
+      }>;
+    },
+  );
   if (!text) return null;
 
   let cleanText = text;
@@ -344,7 +402,7 @@ const expandGeminiResponse = (payload, sourceWords) => {
     }
   }
 
-  let parsed;
+  let parsed: GeminiResponse;
   try {
     parsed = JSON.parse(cleanText);
   } catch (error) {
@@ -363,7 +421,7 @@ const expandGeminiResponse = (payload, sourceWords) => {
   return JSON.stringify(ensureTrimmedWords(parsed, sourceWords));
 };
 
-export async function POST(req) {
+export async function POST(req: Request) {
   try {
     const body = await req.json();
     const rawKeys = (
@@ -393,11 +451,11 @@ export async function POST(req) {
       );
     }
 
+    const sourceWords: Word[] = words;
     const targetModel = (requestedModel || DEFAULT_GOOGLE_MODEL).replace(
       /^models\//,
       "",
     );
-    const sourceWords = words;
     const transcriptText = buildTranscriptText(sourceWords);
     const resolvedShorteningMode = isValidShorteningMode(shorteningMode)
       ? shorteningMode
@@ -441,7 +499,8 @@ export async function POST(req) {
     return NextResponse.json(wrapper);
   } catch (error) {
     console.error("[Gemini SDK POST Error]:", error);
-    const errorMessage = error.message || "Internal Server Error";
+    const errorMessage =
+      error instanceof Error ? error.message : "Internal Server Error";
     const isRateLimit =
       errorMessage.includes("429") || errorMessage.includes("quota");
 

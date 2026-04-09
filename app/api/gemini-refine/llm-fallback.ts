@@ -24,7 +24,7 @@ export const getApiKeys = () => {
   return rawKeys[Math.floor(Math.random() * rawKeys.length)];
 };
 
-const callGemini = async (prompt, model) => {
+const callGemini = async (prompt: string, model: string) => {
   const apiKey = getApiKeys();
   if (!apiKey) throw new Error("Missing API Key");
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -36,7 +36,7 @@ const callGemini = async (prompt, model) => {
   return result.response;
 };
 
-const callCloudflareWorker = async (prompt) => {
+const callCloudflareWorker = async (prompt: string) => {
   if (!LLAMA_API_KEY) throw new Error("Missing CLOUDFLARE_LLM_API_KEY");
 
   const response = await fetch(LLAMA_API_URL, {
@@ -69,22 +69,31 @@ const callCloudflareWorker = async (prompt) => {
   return { candidates: [{ content: { parts: [{ text: responseText }] } }] };
 };
 
-export const callWithFallback = async (prompt) => {
-  // If env says use Cloudflare directly
+interface LLMResponse {
+  candidates?: Array<{
+    content?: {
+      parts?: Array<{ text?: string }>;
+    };
+  }>;
+}
+
+export const callWithFallback = async (
+  prompt: string,
+): Promise<LLMResponse> => {
   if (USE_CLOUDFLARE_DIRECTLY) {
     console.log("[LLM] Using Cloudflare Worker directly");
     return callCloudflareWorker(prompt);
   }
 
-  // Try Gemini first
   try {
     console.log("[LLM] Trying Gemini...");
     return await callGemini(prompt, SELECTED_MODEL);
   } catch (err) {
     const isRateLimit =
-      err.message?.includes("429") ||
-      err.message?.includes("quota") ||
-      err.message?.includes("Rate limit");
+      err instanceof Error &&
+      (err.message?.includes("429") ||
+        err.message?.includes("quota") ||
+        err.message?.includes("Rate limit"));
 
     if (isRateLimit && LLAMA_API_KEY) {
       console.log(

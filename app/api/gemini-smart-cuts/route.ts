@@ -27,7 +27,14 @@ const GENERATION_CONFIG = {
   topP: 0.9,
 };
 
-export async function POST(req) {
+interface Word {
+  text: string;
+  start: number;
+  end: number;
+  speaker_id?: string | null;
+}
+
+export async function POST(req: Request) {
   try {
     const body = await req.json();
     const rawKeys = (
@@ -52,18 +59,15 @@ export async function POST(req) {
       );
     }
 
-    // Build transcript text for context (but ensure we use it for matching only)
-    const transcriptText = words.map((w) => w.text).join(" ");
+    const transcriptText = words.map((w: Word) => w.text).join(" ");
 
     const prompt = `${SMART_CUTS_PROMPT}\n\nTRANSCRIPT:\n${transcriptText}`;
     const response = await callWithFallback(prompt);
     const text = response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    // Parse JSON from response
-    let parsed = null;
+    let parsed: { trimmed_text?: string; notes?: string } | null = null;
     let cleanText = text;
 
-    // Extract from markdown if present
     const jsonMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
       cleanText = jsonMatch[1].trim();
@@ -85,32 +89,32 @@ export async function POST(req) {
       );
     }
 
-    // Now match trimmed_text back to source words
-    const trimmedText = parsed.trimmed_text || "";
+    const trimmedText = parsed?.trimmed_text || "";
     const matchedWords = matchTextToWords(words, trimmedText);
 
     return NextResponse.json({
       trimmed_text: trimmedText,
       trimmed_words: matchedWords,
-      notes: parsed.notes,
+      notes: parsed?.notes,
     });
   } catch (error) {
     console.error("[Smart Cuts Error]:", error);
     return NextResponse.json(
-      { error: error.message || "Internal Server Error" },
+      {
+        error: error instanceof Error ? error.message : "Internal Server Error",
+      },
       { status: 500 },
     );
   }
 }
 
-// Match cleaned text back to source words
-function matchTextToWords(sourceWords, trimmedText) {
+function matchTextToWords(sourceWords: Word[], trimmedText: string): Word[] {
   if (!sourceWords?.length || !trimmedText) return [];
 
-  const normalize = (t) => t.toLowerCase().replace(/[^a-z0-9'\s]/g, "");
+  const normalize = (t: string) => t.toLowerCase().replace(/[^a-z0-9'\s]/g, "");
   const targetTokens = normalize(trimmedText).split(/\s+/).filter(Boolean);
 
-  const matchedIndices = [];
+  const matchedIndices: number[] = [];
   let sourceIdx = 0;
 
   for (const token of targetTokens) {
@@ -129,7 +133,6 @@ function matchTextToWords(sourceWords, trimmedText) {
 
   if (!matchedIndices.length) return [];
 
-  // Take first and last for time range
   const startIdx = Math.min(...matchedIndices);
   const endIdx = Math.max(...matchedIndices);
 

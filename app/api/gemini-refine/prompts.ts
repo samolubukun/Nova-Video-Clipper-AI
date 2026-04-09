@@ -28,7 +28,7 @@ export const SINGLE_RESPONSE_SCHEMA = `Return STRICT JSON matching this schema:
 
 Do not include explanations outside the JSON.`;
 
-export const buildMultiConceptSchema = (maxVariants, mode) => {
+export const buildMultiConceptSchema = (maxVariants: number, mode: string) => {
   if (mode === "disfluency") {
     return `Return STRICT JSON matching this schema:
 {
@@ -64,7 +64,7 @@ Provide between 2 and ${maxVariants} DISTINCT concepts. Each concept must:
 Do not include explanations outside the JSON.`;
 };
 
-export const SHORTENING_MODE_INSTRUCTIONS = {
+export const SHORTENING_MODE_INSTRUCTIONS: Record<string, string> = {
   disfluency:
     "Focus exclusively on cleaning up vocal disfluencies, hesitations, and filler phrases. Keep every substantive sentence unless it is entirely filler. The final runtime should closely match the original aside from the removed filler tokens.",
   thirty_seconds:
