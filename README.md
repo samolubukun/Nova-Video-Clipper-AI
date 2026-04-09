@@ -28,7 +28,7 @@ Everything runs securely via WebAssembly and browser-native AI integrations.
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/samolubukun/Nova-Video-Clipper.git
+   git clone https://github.com/samolubukun/Nova-Video-Clipper-AI.git
    cd Nova-Video-Clipper
    ```
 
