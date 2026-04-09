@@ -19,11 +19,27 @@ const loadFFmpeg = async () => {
     ffmpegInstance = new FFmpeg();
   }
 
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-  await ffmpegInstance.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-  });
+  // Use local files first, fallback to CDN
+  const baseURL = "/ffmpeg";
+  try {
+    await ffmpegInstance.load({
+      coreURL: `${baseURL}/ffmpeg-core.js`,
+      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+    });
+  } catch {
+    // Fallback to CDN if local files fail
+    const cdnBaseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+    await ffmpegInstance.load({
+      coreURL: await toBlobURL(
+        `${cdnBaseURL}/ffmpeg-core.js`,
+        "text/javascript",
+      ),
+      wasmURL: await toBlobURL(
+        `${cdnBaseURL}/ffmpeg-core.wasm`,
+        "application/wasm",
+      ),
+    });
+  }
   ffmpegLoaded = true;
   return ffmpegInstance;
 };
