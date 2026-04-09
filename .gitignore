@@ -1,0 +1,6 @@
+node_modules
+.next
+.env*
+public/cesdk-engine
+public/cesdk-js
+public/models
