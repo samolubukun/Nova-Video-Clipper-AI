@@ -5,10 +5,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps
+RUN npm install --legacy-peer-deps --ignore-scripts
 
 COPY . .
-RUN npm run prepare-face-models || true
 RUN npm run build
 
 EXPOSE 7860
