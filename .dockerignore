@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+*.md
+!package.json
+!package-lock.json
+public/ffmpeg
+.dockerignore
+Dockerfile
+*.log
+.env*.local
