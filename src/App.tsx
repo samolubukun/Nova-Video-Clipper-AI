@@ -14,25 +14,20 @@ const loadFFmpeg = async () => {
   if (ffmpegLoaded && ffmpegInstance) return ffmpegInstance;
 
   if (!ffmpegInstance) {
-    // Dynamic import to avoid SSR issues
     const { FFmpeg } = await import("@ffmpeg/ffmpeg");
     ffmpegInstance = new FFmpeg();
   }
 
-  // Use local files first, fallback to CDN
-  const baseURL = "/ffmpeg";
-  try {
-    await ffmpegInstance.load({
-      coreURL: `${baseURL}/ffmpeg-core.js`,
-      wasmURL: `${baseURL}/ffmpeg-core.wasm`,
-    });
-  } catch {
-    // Fallback to CDN if local files fail
-    const cdnBaseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-    await ffmpegInstance.load({
-      coreURL: await toBlobURL(
-        `${cdnBaseURL}/ffmpeg-core.js`,
-        "text/javascript",
+  // Use single-thread core - works without COOP/COEP headers
+  // Slower than multi-thread but works reliably on all hosts
+  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+  await ffmpegInstance.load({
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+  });
+  ffmpegLoaded = true;
+  return ffmpegInstance;
+};
       ),
       wasmURL: await toBlobURL(
         `${cdnBaseURL}/ffmpeg-core.wasm`,
