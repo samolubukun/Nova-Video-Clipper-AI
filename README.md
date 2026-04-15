@@ -47,7 +47,9 @@ Everything runs securely via WebAssembly and browser-native AI integrations.
    # Access at http://localhost:3000
    ```
 
-## Architecture
+## System Architecture
+
+<img width="1821" height="1718" alt="video clipper ai" src="https://github.com/user-attachments/assets/aa9d9873-194f-4f58-9deb-1d5999ecbc5b" />
 
 ```
 Video File
